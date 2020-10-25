@@ -1,9 +1,11 @@
-from flask import Flask, request
+from flask import Flask, request, Response
 import pandas as pd
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from flask_migrate import Migrate
-
+from flask_cors import CORS
+from werkzeug.exceptions import BadRequestKeyError
+import json
 db = SQLAlchemy()
 
 app = Flask(__name__)
@@ -12,7 +14,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
 migrate = Migrate(app, db)
-
+CORS(app)
 
 @app.route('/upload', methods=['POST'])
 def upload_csv():
@@ -22,7 +24,13 @@ def upload_csv():
     '''
 
     # read the file as a pandas dataframe
-    data = pd.read_csv(request.files['dataset'])
+    try:
+        data = pd.read_csv(request.files['dataset'])
+    except BadRequestKeyError:
+        return{
+            'ack': False,
+            'details': 'dataset not found in request'
+        }
     
     # write the dataframe to database using the given name as table name
     try:
@@ -40,34 +48,81 @@ def upload_csv():
     }
 
 @app.route('/dataset/<string:name>', methods=['GET'])
-def visualization(name):
+def detail_dataset(name):
     '''
         view to see the dataset details : column names and data types
     '''
     # sql to get the column name and data type
-    sql_text = text("select column_name, data_type from information_schema.columns where table_name = :table_name")
+    sql_text = text("select column_name from information_schema.columns where table_name = :table_name")
     column_names = db.engine.execute(sql_text, table_name=name).fetchall()
     
     # create json serializable data from result
-    result = []
-    for data in column_names:
-        result.append([data[0], data[1]])
+    result = {
+        'columns': [name[0] for name in column_names],
+        'functions': ['sum', 'count', 'min',  'max', 'none']
+    }
 
-    return {
+    return Response(json.dumps({
         'ack': True,
         'details': 'Success',
         'data': result
-    }
+    }), status=200, content_type='application/json')
 
 @app.route('/dataset', methods=['GET'])
 def list_datasets():
     '''
         list all the datasets that have been uploaded
     '''
-    return {
+    result = []
+    i = 0
+    temp = []
+    for name in db.engine.table_names():
+        temp.append(name)
+        i = i + 1
+        if i == 3:
+            result.append(temp)
+            temp = list()
+            i = 0
+    
+    return Response(json.dumps({
         'ack': True,
         'details': 'Success',
-        'data': db.engine.table_names()
+        'data': result
+    }), status='200', content_type='application/json')
+
+@app.route('/points/<string:name>', methods=['POST'])
+def visualize(name):
+    '''
+        generate all the x, y and f according to user defined value
+    '''
+    aggregate_logic = {
+        'sum' : lambda x, y: 'select "' + x + '", sum ("' + y + '") from "' + name + '" group by "' + x + '";',
+        'none' : lambda x, y: 'select "' + x + '", "' + y + '" from "' + name + '";',
     }
+    try:
+        print(aggregate_logic[request.json['f']](request.json['x'], request.json['y']))
+        result = db.engine.execute(aggregate_logic[request.json['f']](request.json['x'], request.json['y'])).fetchall()
+    except BadRequestKeyError:
+        return Response(json.dumps({
+            'ack': False,
+            'details': 'bad request required parameters not found'
+        }), status='400', content_type='application/json')
+    except KeyError:
+        return Response(json.dumps({
+            'ack': False,
+            'details': 'aggregate function not found'
+        }), status='400', content_type='application/json')
+
+    data = {'x': [], 'y': []}
+
+    for entry in result:
+        data['x'].append(entry[0])
+        data['y'].append(entry[1])
+
+    return Response(json.dumps({
+        'ack': True,
+        'details': 'Success',
+        'data': data
+    }), status='200', content_type='application/json')
 
 app.run(debug=True, port=8000)
