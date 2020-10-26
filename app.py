@@ -1,20 +1,24 @@
 from flask import Flask, request, Response
 import pandas as pd
-from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
 from flask_migrate import Migrate
 from flask_cors import CORS
 from werkzeug.exceptions import BadRequestKeyError
 import json
-db = SQLAlchemy()
+from models import Dataset, db
+
+
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://sumit:sumit@localhost:5432/datasets"
+app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://sumit:sumit@db:5432/datasets"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
-migrate = Migrate(app, db)
+db.create_all(app=app)
+
 CORS(app)
+
+
 
 @app.route('/upload', methods=['POST'])
 def upload_csv():
@@ -35,6 +39,8 @@ def upload_csv():
     # write the dataframe to database using the given name as table name
     try:
         data.to_sql(request.values['name'], con=db.engine)
+        db.session.add(Dataset(name=request.values['name']))
+        db.session.commit()
     except ValueError:
         # error when the name is duplicate
         return {
@@ -76,13 +82,15 @@ def list_datasets():
     result = []
     i = 0
     temp = []
-    for name in db.engine.table_names():
-        temp.append(name)
+    for dataset in Dataset.query.all():
+        temp.append(dataset.name)
         i = i + 1
         if i == 3:
             result.append(temp)
             temp = list()
             i = 0
+
+    
     
     return Response(json.dumps({
         'ack': True,
@@ -100,7 +108,6 @@ def visualize(name):
         'none' : lambda x, y: 'select "' + x + '", "' + y + '" from "' + name + '";',
     }
     try:
-        print(aggregate_logic[request.json['f']](request.json['x'], request.json['y']))
         result = db.engine.execute(aggregate_logic[request.json['f']](request.json['x'], request.json['y'])).fetchall()
     except BadRequestKeyError:
         return Response(json.dumps({
@@ -125,4 +132,4 @@ def visualize(name):
         'data': data
     }), status='200', content_type='application/json')
 
-app.run(debug=True, port=8000)
+app.run(host='0.0.0.0', debug=True, port=8000)
