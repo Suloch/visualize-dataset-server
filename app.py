@@ -81,15 +81,8 @@ def list_datasets():
     '''
     result = []
     i = 0
-    temp = []
     for dataset in Dataset.query.all():
-        temp.append(dataset.name)
-        i = i + 1
-        if i == 3:
-            result.append(temp)
-            temp = list()
-            i = 0
-
+        result.append(dataset.name)
     
     
     return Response(json.dumps({
